@@ -1,2 +1,3 @@
-# Basic-Calculator
-An  implementation of a basic calculator in rust
+# File-Tree-Visualizer
+An implementation of visualizing a file tree using a tree data structure and a GUI.
+```
