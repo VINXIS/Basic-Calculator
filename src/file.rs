@@ -109,7 +109,7 @@ fn output_sub_path(
     let file_name = path.file_name().into_string().map_err(|_| Error::new(ErrorKind::Other, "Invalid filename"))?;
     let metadata = metadata(&path.path())?;
 
-    if  (
+    if (
         (!cfg!(windows) && file_name.starts_with(".")) ||
         (cfg!(windows) && metadata.file_attributes() & 2 == 2)
     ) && 
