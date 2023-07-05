@@ -96,6 +96,12 @@ fn get_files_oos(path: &PathBuf, hidden: &bool, verbose: &bool) -> u64 {
 
         let file_name = entry.file_name().into_string().unwrap_or_default();
 
+        #[cfg(target_os = "windows")]
+        if hidden_check(&metadata, &file_name, hidden) {
+            continue;
+        }
+
+        #[cfg(target_os = "linux")]
         if hidden_check(&file_name, hidden) {
             continue;
         }
@@ -148,6 +154,12 @@ pub fn get_files(
 
         let file_name = entry.file_name().into_string().unwrap_or_default();
 
+        #[cfg(target_os = "windows")]
+        if hidden_check(&metadata, &file_name, hidden) {
+            continue;
+        }
+
+        #[cfg(target_os = "linux")]
         if hidden_check(&file_name, hidden) {
             continue;
         }

@@ -1,4 +1,7 @@
-use std::{env::var, fs::Metadata, os::windows::fs::MetadataExt};
+use std::env::var;
+
+#[cfg(target_os = "windows")]
+use std::{fs::Metadata, os::windows::fs::MetadataExt};
 
 pub enum Sort {
     NameASC,
@@ -26,9 +29,12 @@ pub fn parse_file_size(file_size: u64) -> String {
     format!("{:.2} {}", file_size, file_size_units[unit])
 }
 
+#[cfg(target_os = "windows")]
 pub fn hidden_check (metadata: &Metadata, file_name: &String, hidden: &bool) -> bool {
-    (
-        (!cfg!(windows) && file_name.starts_with(".")) ||
-        (cfg!(windows) && metadata.file_attributes() & 2 == 2)
-    ) && !hidden
+    metadata.file_attributes() & 2 == 2 && !hidden
+}
+
+#[cfg(target_os = "linux")]
+pub fn hidden_check (file_name: &String, hidden: &bool) -> bool {
+    file_name.starts_with(".") && !hidden
 }
