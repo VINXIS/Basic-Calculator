@@ -12,7 +12,10 @@ fn print_help() {
     -l, --levels <NUM>              The number of levels to list (Default: 1)
     -s, --sort <TYPE> [ASC/DEC]     The type of sort to use (Default: name ASC)
                                     Valid types: name, size, date
-                                    Optional: ASC (ascending), DEC (descending)
+                                    Optional: ASC (ascending), DEC (descending)]
+    -f, --filter <FILTER>           Filter only specific file types you want by a string listing file extensions
+                                    Various filters can be used by separating them with a comma
+                                    (Example: -f .png,.jpg,.jpeg)
     -n, --hidden                    Show hidden files and folders
     -v, --verbose                   Show verbose output (which folders are currently being read)
     -h, --help                      Prints help information");
@@ -21,11 +24,12 @@ fn print_help() {
 fn main() {
     let start = Instant::now();
     let args = args().collect::<Vec<String>>();
-    let hidden = args.contains(&String::from("--hidden")) || args.contains(&String::from("-n"));
+    let hidden: bool = args.contains(&String::from("--hidden")) || args.contains(&String::from("-n"));
     let verbose: bool = args.contains(&String::from("--verbose")) || args.contains(&String::from("-v"));
     let mut path = current_dir().unwrap_or_default();
     let mut levels: u8 = 1;
     let mut sort: Sort = Sort::NameASC;
+    let mut filter: Option<Vec<String>> = None;
     for i in 0..args.len() {
         let arg = &args[i];
         if  arg == "--help" || arg == "-h" {
@@ -36,13 +40,13 @@ fn main() {
         if (arg == "--dir" || arg == "-d") && args.len() > i + 1 {
             // Get the next arg and validate the path
             let next_arg = &args[i+1];
-            let next_path = Path::new(next_arg);
-            if next_path.is_dir() {
-                path = next_path.to_path_buf();
-            } else {
-                panic!("{} is not a valid path", next_arg);
+            let new_path = Path::new(next_arg);
+            if new_path.is_dir() {
+                path = new_path.to_path_buf();
+                continue;
             }
-            continue;
+            
+            panic!("{} is not a valid path", next_arg);
         }
 
         if (arg == "--levels" || arg =="-l") && args.len() > i + 1 {
@@ -50,6 +54,11 @@ fn main() {
                 Ok(levels) => levels,
                 Err(_) => panic!("Invalid number of levels: {}", args[i+1])
             };
+            continue;
+        }
+
+        if (arg == "--filter" || arg == "-f") && args.len() > i + 1 {
+            filter = Some(args[i+1].split(",").map(|s| s.to_string()).collect::<Vec<String>>());
             continue;
         }
 
@@ -81,7 +90,7 @@ fn main() {
         }
     }
 
-    let dir_file = match get_files(&path, 1, &levels, &hidden, &verbose) {
+    let dir_file = match get_files(&path, 1, &levels, &hidden, &verbose, &filter) {
         GetFile::File(dir_file) => dir_file,
         GetFile::Size(size) => {
             println!("{} ({})", path.display(), parse_file_size(size));

@@ -2,13 +2,6 @@ use std::{fs::{FileType, read_dir, Metadata}, path::PathBuf};
 
 use crate::{util::{unicode_support, parse_file_size, hidden_check}, Sort, error::{FileTimeError, handle_io_error, handle_file_time_error}};
 
-enum FileIcon {
-    Directory,
-    File,
-    Symlink,
-    Unknown
-}
-
 pub enum GetFile {
     File(FileInfo),
     Size(u64)
@@ -23,30 +16,12 @@ pub struct FileInfo {
     pub sub_files: Option<Vec<GetFile>>
 }
 
-fn get_file_type(file_type: &FileType) -> FileIcon {
-    match file_type {
-        _ if file_type.is_dir() => FileIcon::Directory,
-        _ if file_type.is_symlink() => FileIcon::Symlink,
-        _ if file_type.is_file() => FileIcon::File,
-        _ => FileIcon::Unknown,
-    }
-}
-
 fn get_file_icon(file_type: &FileType) -> String {
-    if unicode_support() {
-        match get_file_type(file_type) {
-            FileIcon::Directory => String::from("📁"),
-            FileIcon::File => String::from("📄"),
-            FileIcon::Symlink => String::from("🔗"),
-            FileIcon::Unknown => String::from("❓")
-        }
-    } else {
-        match get_file_type(file_type) {
-            FileIcon::Directory => String::from("[D]"),
-            FileIcon::File => String::from("[F]"),
-            FileIcon::Symlink => String::from("[S]"),
-            FileIcon::Unknown => String::from("[?]")
-        }
+    match file_type {
+        _ if file_type.is_dir() => if unicode_support() { String::from("📁") } else { String::from("[D]") },
+        _ if file_type.is_symlink() => if unicode_support() { String::from("🔗") } else { String::from("[S]") },
+        _ if file_type.is_file() => if unicode_support() { String::from("📄") } else { String::from("[F]") },
+        _ => if unicode_support() { String::from("❓") } else { String::from("[?]") }
     }
 }
 
@@ -123,7 +98,8 @@ pub fn get_files(
     current_level: u8,
     levels: &u8,
     hidden: &bool,
-    verbose: &bool
+    verbose: &bool,
+    filter: &Option<Vec<String>>
 ) -> GetFile {
     let dir = match read_dir(path) {
         Ok(dir) => dir,
@@ -177,9 +153,17 @@ pub fn get_files(
                     sub_files: None
                 }));
             } else {
-                sub_files.push(get_files(&entry.path(), current_level + 1, levels, hidden, verbose));
+                sub_files.push(get_files(&entry.path(), current_level + 1, levels, hidden, verbose , filter));
             }
         } else {
+            if let Some(extensions_allowed) = filter {
+                if !extensions_allowed
+                .iter()
+                .any(|extension| file_name.ends_with(extension)) {
+                    sub_files.push(GetFile::Size(metadata.len()));
+                    continue;
+                }
+            }
             sub_files.push(GetFile::File(FileInfo {
                 file_level: current_level,
                 file_name,
