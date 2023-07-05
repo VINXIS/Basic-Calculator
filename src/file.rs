@@ -1,12 +1,26 @@
-use std::{io::{Error, ErrorKind}, fs::{FileType, read_dir, metadata, DirEntry}, path::PathBuf, os::windows::fs::MetadataExt};
+use std::{io::{Error, ErrorKind}, fs::{FileType, read_dir}, path::PathBuf};
 
-use crate::util::{unicode_support, parse_file_size};
+use crate::{util::{unicode_support, parse_file_size, hidden_check}, Sort};
 
 enum FileIcon {
     Directory,
     File,
     Symlink,
     Unknown
+}
+
+pub enum GetFile {
+    File(FileInfo),
+    Size(u64)
+}
+
+pub struct FileInfo {
+    file_level: u8,
+    file_name: String,
+    file_type: FileType,
+    created: u64,
+    pub file_size: u64,
+    pub sub_files: Option<Vec<GetFile>>
 }
 
 fn get_file_type(file_type: &FileType) -> FileIcon {
@@ -39,131 +53,173 @@ fn get_file_icon(file_type: &FileType) -> String {
     }
 }
 
-fn calculate_dir_size(
-    main_path: &PathBuf,
-    hidden: &bool
-) -> u64 {
-    let paths = match read_dir(main_path) {
-        Ok(paths) => paths,
-        Err(err) => {
-            println!("Could not read directory \"{}\" due to the error:\n{}", main_path.display(), err);
-            return 0
-        }
-
-    };
-    let mut size: u64 = 0;
-
-    for path in paths {
-        let path = match path {
-            Ok(path) => path,
-            Err(err) => {
-                println!("Could not read sub_path in directory \"{}\" due to the error:\n{}", main_path.display(), err);
-                continue
-            }
-        };
-        match (|| -> Result<(), Error> {
-            let metadata = metadata(&path.path())?;
-            let file_type = path.file_type()?;
-
-            if file_type.is_dir() {
-                size += metadata.len() + calculate_dir_size(&path.path(), hidden);
-            } else {
-                size += metadata.len();
-            }
-            Ok(())
-        })() {
-            Ok(_) => {},
-            Err(err) => println!("Could not read directory \"{}\" due to the error:\n{}", path.path().display(), err)
-        }
-    }
-
-    size
-}
-
-fn append_level (level: u8) -> String {
-    if level > 1 {
+fn append_level(level: &u8) -> String {
+    if level > &1 {
         format!("{}└", String::from(" ").repeat((level - 1) as usize))
     } else {
         String::from("")
     }
 }
 
-fn print_file (current_level: u8, file_type: &FileType, file_name: &str, file_size: u64) {
-    println!(
-        "{}{} {} ({})", 
-        append_level(current_level), 
-        get_file_icon(file_type), 
-        file_name, 
-        parse_file_size(file_size)
-    );
+fn handle_io_error(path_buf: &PathBuf, err: Error) {
+    match err.kind() {
+        ErrorKind::NotFound => println!("The specified path {} probably doesn't exist", path_buf.display()),
+        ErrorKind::PermissionDenied => println!("The program doesn't have permission to access {}", path_buf.display()),
+        _ => println!("Could not read directory \"{}\" due to the error:\n{}", path_buf.display(), err)
+    }
 }
 
-fn output_sub_path(
-    path: &DirEntry, 
-    levels: u8, 
-    current_level: u8, 
-    hidden: &bool, 
-    counter: &mut u32,
-    size_count: &mut u64
-) -> Result<(), Error> {
-    let file_name = path.file_name().into_string().map_err(|_| Error::new(ErrorKind::Other, "Invalid filename"))?;
-    let metadata = metadata(&path.path())?;
-
-    if  (
-        (!cfg!(windows) && file_name.starts_with(".")) ||
-        (cfg!(windows) && metadata.file_attributes() & 2 == 2)
-    ) && 
-    !hidden {
-        return Ok(());
-    }
-    
-    let file_type = path.file_type()?;
-
-    if current_level <= levels {
-        if file_type.is_dir() {
-            let dir_size = metadata.len() + calculate_dir_size(&path.path(), hidden);
-
-            print_file(current_level, &file_type, &file_name, dir_size);
-            output_path(&path.path(), levels, current_level + 1, hidden, counter, size_count);
-            
-            if current_level == 1 {
-                *size_count += dir_size;
-            }
-        } else {
-            print_file(current_level, &file_type, &file_name, metadata.len());
-        }
-    }
-
-    *counter += 1;
-    return Ok(());
-}
-
-pub fn output_path(
-    main_path: &PathBuf, 
-    levels: u8, 
-    current_level: u8, 
-    hidden: &bool, 
-    counter: &mut u32,
-    size_count: &mut u64
-) {
-    let paths = match read_dir(main_path.clone()) {
-        Ok(paths) => paths,
+// For deeper levels to get file size
+fn get_files_oos(path: &PathBuf, hidden: &bool, verbose: &bool) -> u64 {
+    let dir = match read_dir(path) {
+        Ok(dir) => dir,
         Err(err) => {
-            println!("Could not read directory \"{}\" due to the error:\n{}", main_path.display(), err);
-            return
+            handle_io_error(&path, err);
+            return 0;
         }
     };
 
-    for path in paths {
-        let path = match path {
-            Ok(path) => path,
+    if *verbose {
+        println!("Reading {}...", path.display());
+    }
+
+    let mut size: u64 = 0;
+    for entry in dir.filter_map(Result::ok) {
+        let metadata = match entry.metadata() {
+            Ok(metadata) => metadata,
             Err(err) => {
-                println!("Could not read directory \"{}\" due to the error:\n{}", main_path.display(), err);
-                continue
+                handle_io_error(&entry.path(), err);
+                continue;
             }
         };
-        if let Err(err) = output_sub_path(&path, levels, current_level, hidden, counter , size_count) {
-            println!("Could not read directory \"{}\" due to the error:\n{}", path.path().display(), err)
+
+        let file_name = entry.file_name().into_string().unwrap_or_default();
+
+        if hidden_check(&metadata, &file_name, hidden) {
+            continue;
         }
+
+        if metadata.is_dir() {
+            size += get_files_oos(&entry.path(), hidden, verbose);
+        } else {
+            size += metadata.len();
+        }
+    }
+
+    size
+}
+
+pub fn get_files(
+    path: &PathBuf,
+    current_level: u8,
+    levels: &u8,
+    hidden: &bool,
+    verbose: &bool
+) -> GetFile {
+    let dir = match read_dir(path) {
+        Ok(dir) => dir,
+        Err(err) => {
+            handle_io_error(&path, err);
+            return GetFile::Size(0);
+        }
+    };
+    let metadata = match path.metadata() {
+        Ok(metadata) => metadata,
+        Err(err) => {
+            handle_io_error(&path, err);
+            return GetFile::Size(0);
+        }
+    };
+
+    if *verbose {
+        println!("Reading {}...", path.display());
+    }
+
+    let mut sub_files: Vec<GetFile> = Vec::new();
+    for entry in dir.filter_map(Result::ok) {
+        let metadata = match entry.metadata() {
+            Ok(metadata) => metadata,
+            Err(err) => {
+                handle_io_error(&entry.path(), err);
+                continue;
+            }
+        };
+
+        let file_name = entry.file_name().into_string().unwrap_or_default();
+
+        if hidden_check(&metadata, &file_name, hidden) {
+            continue;
+        }
+
+        if metadata.is_dir() {
+            if current_level >= *levels {
+                sub_files.push(GetFile::File(FileInfo {
+                    file_level: current_level,
+                    file_name,
+                    file_type: metadata.file_type(),
+                    created: metadata.created().unwrap().elapsed().unwrap().as_secs(),
+                    file_size: metadata.len() + get_files_oos(&entry.path(), hidden, verbose),
+                    sub_files: None
+                }));
+            } else {
+                sub_files.push(get_files(&entry.path(), current_level + 1, levels, hidden, verbose));
+            }
+        } else {
+            sub_files.push(GetFile::File(FileInfo {
+                file_level: current_level,
+                file_name,
+                file_type: metadata.file_type(),
+                created: metadata.created().unwrap().elapsed().unwrap().as_secs(),
+                file_size: metadata.len(),
+                sub_files: None
+            }));
+        }
+    }
+
+    GetFile::File(FileInfo {
+        file_level: current_level - 1,
+        file_name: path.file_name().unwrap_or_default().to_str().unwrap_or_default().to_string(),
+        file_type: metadata.file_type(),
+        created: metadata.created().unwrap().elapsed().unwrap().as_secs(),
+        file_size: sub_files.iter().map(|file| match file {
+            GetFile::File(file) => file.file_size,
+            GetFile::Size(size) => *size
+        }).sum::<u64>(),
+        sub_files: Some(sub_files)
+    })
+}
+
+fn print_file(file: &FileInfo) -> String {
+    format!(
+        "{}{} {} ({})", 
+        append_level(&file.file_level), 
+        get_file_icon(&file.file_type), 
+        file.file_name, 
+        parse_file_size(file.file_size)
+    )
+}
+
+pub fn print_sub_files(sub_files: &[GetFile], sort: &Sort) {
+    let mut files = sub_files.iter().filter_map(|file| match file {
+        GetFile::File(file) => Some(file),
+        GetFile::Size(_) => None
+    }).collect::<Vec<&FileInfo>>();
+    files.sort_by(|f1, f2| match sort {
+            Sort::NameASC => f1.file_name.cmp(&f2.file_name),
+            Sort::NameDEC => f2.file_name.cmp(&f1.file_name),
+            Sort::SizeASC => f1.file_size.cmp(&f2.file_size),
+            Sort::SizeDEC => f2.file_size.cmp(&f1.file_size),
+            Sort::DateASC => f1.created.cmp(&f2.created),
+            Sort::DateDEC => f2.created.cmp(&f1.created)
+    });
+    for file in files {
+        println!("{}", print_file(file));
+
+        let sub_files = match &file.sub_files {
+            Some(sub_files) => sub_files,
+            None => continue
+        };
+
+        print_sub_files(sub_files, sort);
     }
 }
