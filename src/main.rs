@@ -2,6 +2,7 @@ use std::{env::{args, current_dir}, process::exit, path::Path, time::Instant};
 
 use crate::{file::{get_files, GetFile, print_sub_files}, util::{unicode_support, parse_file_size, Sort}};
 
+mod error;
 mod file;
 mod util;
 
@@ -45,7 +46,10 @@ fn main() {
         }
 
         if (arg == "--levels" || arg =="-l") && args.len() > i + 1 {
-            levels = args[i+1].parse::<u8>().unwrap();
+            levels = match args[i+1].parse::<u8>() {
+                Ok(levels) => levels,
+                Err(_) => panic!("Invalid number of levels: {}", args[i+1])
+            };
             continue;
         }
 

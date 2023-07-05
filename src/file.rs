@@ -1,6 +1,6 @@
-use std::{io::{Error, ErrorKind}, fs::{FileType, read_dir}, path::PathBuf};
+use std::{fs::{FileType, read_dir, Metadata}, path::PathBuf};
 
-use crate::{util::{unicode_support, parse_file_size, hidden_check}, Sort};
+use crate::{util::{unicode_support, parse_file_size, hidden_check}, Sort, error::{FileTimeError, handle_io_error, handle_file_time_error}};
 
 enum FileIcon {
     Directory,
@@ -24,14 +24,11 @@ pub struct FileInfo {
 }
 
 fn get_file_type(file_type: &FileType) -> FileIcon {
-    if file_type.is_dir() {
-        FileIcon::Directory
-    } else if file_type.is_file() {
-        FileIcon::File
-    } else if file_type.is_symlink() {
-        FileIcon::Symlink
-    } else {
-        FileIcon::Unknown
+    match file_type {
+        _ if file_type.is_dir() => FileIcon::Directory,
+        _ if file_type.is_symlink() => FileIcon::Symlink,
+        _ if file_type.is_file() => FileIcon::File,
+        _ => FileIcon::Unknown,
     }
 }
 
@@ -53,19 +50,23 @@ fn get_file_icon(file_type: &FileType) -> String {
     }
 }
 
+fn get_created_since(metadata: &Metadata) -> Result<u64, FileTimeError> {
+    let creation_time = metadata.created()?;
+    let elapsed = creation_time.elapsed()?;
+    Ok(elapsed.as_secs())
+}
+
+fn get_file_metadata_and_created_since(path: &PathBuf) -> Result<(Metadata, u64), FileTimeError> {
+    let metadata = path.metadata()?;
+    let created = get_created_since(&metadata)?;
+    Ok((metadata, created))
+}
+
 fn append_level(level: &u8) -> String {
     if level > &1 {
         format!("{}└", String::from(" ").repeat((level - 1) as usize))
     } else {
         String::from("")
-    }
-}
-
-fn handle_io_error(path_buf: &PathBuf, err: Error) {
-    match err.kind() {
-        ErrorKind::NotFound => println!("The specified path {} probably doesn't exist", path_buf.display()),
-        ErrorKind::PermissionDenied => println!("The program doesn't have permission to access {}", path_buf.display()),
-        _ => println!("Could not read directory \"{}\" due to the error:\n{}", path_buf.display(), err)
     }
 }
 
@@ -95,7 +96,7 @@ fn get_files_oos(path: &PathBuf, hidden: &bool, verbose: &bool) -> u64 {
 
         let file_name = entry.file_name().into_string().unwrap_or_default();
 
-        if hidden_check(&metadata, &file_name, hidden) {
+        if hidden_check(&file_name, hidden) {
             continue;
         }
 
@@ -123,10 +124,10 @@ pub fn get_files(
             return GetFile::Size(0);
         }
     };
-    let metadata = match path.metadata() {
-        Ok(metadata) => metadata,
+    let (metadata, created) = match get_file_metadata_and_created_since(path) {
+        Ok((metadata, created)) => (metadata, created),
         Err(err) => {
-            handle_io_error(&path, err);
+            handle_file_time_error(&path, err);
             return GetFile::Size(0);
         }
     };
@@ -137,17 +138,17 @@ pub fn get_files(
 
     let mut sub_files: Vec<GetFile> = Vec::new();
     for entry in dir.filter_map(Result::ok) {
-        let metadata = match entry.metadata() {
-            Ok(metadata) => metadata,
+        let (metadata, created) = match get_file_metadata_and_created_since(&entry.path()) {
+            Ok((metadata, created)) => (metadata, created),
             Err(err) => {
-                handle_io_error(&entry.path(), err);
+                handle_file_time_error(&entry.path(), err);
                 continue;
             }
         };
 
         let file_name = entry.file_name().into_string().unwrap_or_default();
 
-        if hidden_check(&metadata, &file_name, hidden) {
+        if hidden_check(&file_name, hidden) {
             continue;
         }
 
@@ -157,7 +158,7 @@ pub fn get_files(
                     file_level: current_level,
                     file_name,
                     file_type: metadata.file_type(),
-                    created: metadata.created().unwrap().elapsed().unwrap().as_secs(),
+                    created: created,
                     file_size: metadata.len() + get_files_oos(&entry.path(), hidden, verbose),
                     sub_files: None
                 }));
@@ -169,7 +170,7 @@ pub fn get_files(
                 file_level: current_level,
                 file_name,
                 file_type: metadata.file_type(),
-                created: metadata.created().unwrap().elapsed().unwrap().as_secs(),
+                created: created,
                 file_size: metadata.len(),
                 sub_files: None
             }));
@@ -180,7 +181,7 @@ pub fn get_files(
         file_level: current_level - 1,
         file_name: path.file_name().unwrap_or_default().to_str().unwrap_or_default().to_string(),
         file_type: metadata.file_type(),
-        created: metadata.created().unwrap().elapsed().unwrap().as_secs(),
+        created: created,
         file_size: sub_files.iter().map(|file| match file {
             GetFile::File(file) => file.file_size,
             GetFile::Size(size) => *size
