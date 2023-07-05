@@ -30,7 +30,7 @@ pub fn parse_file_size(file_size: u64) -> String {
 }
 
 #[cfg(target_os = "windows")]
-pub fn hidden_check (metadata: &Metadata, file_name: &String, hidden: &bool) -> bool {
+pub fn hidden_check (metadata: &Metadata, hidden: &bool) -> bool {
     metadata.file_attributes() & 2 == 2 && !hidden
 }
 
